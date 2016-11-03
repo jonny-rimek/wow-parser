@@ -1,0 +1,6 @@
+[package]
+name = "wow-combat-log"
+version = "0.1.0"
+authors = ["Ben Segall <talchas@talchas.net>"]
+
+[dependencies]
