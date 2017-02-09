@@ -66,7 +66,7 @@ fn parse_hex(x: &str) -> u32 {
 }
 
 fn parse_quote(x: &str) -> (&str, &str) {
-v    if x.starts_with('"') {
+    if x.starts_with('"') {
         let OrPanic((_, a, b)) = x.splitn(3, '"').collect();
         assert!(b.starts_with(','));
         let b = &b[1..];
@@ -128,7 +128,7 @@ pub fn parse_line<'a>(intern: &'a Interner, line: &str, start_time: NaiveDateTim
             };
             Entry::Heal { ty: ty, base: base, id: id.parse().unwrap(), spell: name, flags: parse_hex(flag) as u8,
                           hp: hp.parse().unwrap(), maxhp: maxhp.parse().unwrap(), heal: heal.parse().unwrap(), overheal: overheal.parse().unwrap(),
-                          crit: crit == "1"  }
+                          crit: crit.trim() == "1"  }
         },
         "COMBATANT_INFO" => {
             let OrPanic((id, strength, agi, sta, int, dodge, parry, block,

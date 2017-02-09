@@ -20,15 +20,21 @@ static MASTERY_AURAS: &'static [u32] = &[
     22842, // Frenzied Regen (no really, it counts)
     ];
 
-// not renewal(108238), not ysera's gift(145109), not trinkets, not living seed
+// not renewal(108238), not ysera's gift(145109/10), not trinkets
+//
+// Living seed is not itself affected by mastery, but the heal its
+// strength is based on _is_. The ideal computation would be to use
+// the mastery stacks (and rating) from when the heal was created, but
+// to use the overheal/etc values that we only know when it goes off.
 static OTHER_HEALS: &'static [u32] = &[
     157982, // Tranq
     18562, // Swiftmend
     33778, // Lifebloom bloom
     5185, // HT
     81269, // Efflo
-    189800, // Nature's Essence WG insta heal
+    189800, // Nature's Essence (WG insta heal)
     189853, // Dreamwalker
+    48503, // Living seed
     ];
 
 static REJUV_AURAS: &'static [u32] = &[
@@ -41,6 +47,7 @@ const AURA_2PC: u32 = 232378;
 const AURA_CULT: u32 = 200389;
 const SPELL_REGROWTH: u32 = 8936;
 const SPELL_TRANQ: u32 = 157982;
+const MASTERY_2PC: u32 = 4000;
 
 fn find_init_mastery<'a, R: std::io::BufRead>(iter: wow_combat_log::Iter<'a, R>, player: &str) -> Option<(&'a str, u32)> {
     let mut map = HashMap::new();
@@ -76,7 +83,8 @@ fn find_init_mastery<'a, R: std::io::BufRead>(iter: wow_combat_log::Iter<'a, R>,
             _ => (),
         }
     }
-    None
+    //None
+    Some((player_id.unwrap(), 8773))
 }
 
 
@@ -97,7 +105,6 @@ struct RestoComputation<'a> {
     under_2pc: bool,
     player_id: &'a str,
     cur_mastery: u32,
-
 }
 
 impl<'a> RestoComputation<'a> {
@@ -167,11 +174,11 @@ impl<'a> RestoComputation<'a> {
                 }
                 entry.1 = log.timestamp();
                 if id == AURA_CULT {
-                    entry.2 = ty == Apply;
+                    entry.2 = ty != Remove;
                 }
             },
             Aura { ty, id: AURA_2PC, .. } => {
-                self.under_2pc = ty == Apply;
+                self.under_2pc = ty != Remove;
             },
             Heal { id, heal: total_heal, overheal, crit, ty, .. } => {
                 if log.timestamp() < filter_start_time {
@@ -179,26 +186,28 @@ impl<'a> RestoComputation<'a> {
                 }
 
                 let heal = total_heal - overheal;
-                let mastery = self.cur_mastery + if self.under_2pc { 4000 } else { 0 }; 
+                let mastery = self.cur_mastery + if self.under_2pc { MASTERY_2PC } else { 0 }; 
                 let unmast = ((heal as f64) / (1. + entry.0 as f64 * (mastery as f64 /666.6+4.8)/100.)) as u64;
+                let uncrit_heal = if crit { total_heal / 2 } else { total_heal }; // TODO /2 ignores drape and tauren
+                let uncrit_heal = std::cmp::min(uncrit_heal, heal);
                 self.total_healing += heal;
-                self.total_unmastery_healing += unmast;
                 if REJUV_AURAS.contains(&id) {
                     self.rejuv_healing += heal;
                 }
                 if MASTERY_AURAS.contains(&id) || OTHER_HEALS.contains(&id) {
                     self.mastery_healing += (entry.0 as u64) * unmast;
+                    self.total_unmastery_healing += unmast;
+                    if entry.2 {
+                        self.cult_healing += heal;
+                    }
+
+                    if self.under_2pc {
+                        let added = (entry.0 as f64 * unmast as f64 * MASTERY_2PC as f64 /666.6 / 100.) as u64;
+                        self.healing_2pc += heal;
+                        self.healing_2pc_added += added;
+                    }
                 }
-                if entry.2 {
-                    self.cult_healing += heal;
-                }
-                if self.under_2pc {
-                    let added = (entry.0 as f64  *unmast as f64 * 4000.0 /666.6 / 100.) as u64;
-                    self.healing_2pc += heal;
-                    self.healing_2pc_added += added;
-                }
-                let uncrit_heal = if crit { total_heal / 2 } else { total_heal };
-                let uncrit_heal = std::cmp::min(uncrit_heal, heal);
+
                 self.total_uncrit_healing += uncrit_heal;
                 if ty == wow_combat_log::HealType::Heal {
                     if LIVING_SEED_HEALS.contains(&id) {
@@ -276,7 +285,7 @@ fn main() {
             },
             EncounterEnd {name, kill, ..} => {
                 if let Some(s) = encounter_start {
-                    println!("duration: {}, {}, kill: {}", log.timestamp() - s, name, kill);
+                    println!("duration: {}, start: {}, {}, kill: {}", (log.timestamp() - s).num_seconds(), s.num_seconds(), name, kill);
                     println!("{}", encounter);
                     println!("");
                     encounter_start = None;
