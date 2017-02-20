@@ -283,9 +283,9 @@ fn main() {
                 kills -= &encounter;
                 encounter.reset_stats();
             },
-            EncounterEnd {name, kill, ..} => {
+            EncounterEnd {name, kill, difficulty, ..} => {
                 if let Some(s) = encounter_start {
-                    println!("duration: {}, start: {}, {}, kill: {}", (log.timestamp() - s).num_seconds(), s.num_seconds(), name, kill);
+                    println!("duration: {}, start: {}, {} ({}), kill: {}", (log.timestamp() - s).num_seconds(), s.num_seconds(), name, difficulty, kill);
                     println!("{}", encounter);
                     println!("");
                     encounter_start = None;

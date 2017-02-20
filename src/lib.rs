@@ -46,8 +46,8 @@ pub enum Entry<'a> {
     Info { ts: Duration, id: &'a str, strength: u32, agi: u32, sta: u32, int: u32, dodge: u32, parry: u32, block: u32, critm: u32, critr: u32, crits: u32, spd: u32, steal: u32, hastem: u32, hastr: u32, hastes: u32, avd: u32, mastery: u32, versm: u32, versr: u32, verss: u32, armor: u32},
     ChallengeStart { ts: Duration, id: u32 },
     ChallengeEnd { ts: Duration, id: u32 },
-    EncounterStart { ts: Duration, name: &'a str, id: u32 }, // , difficulty/dungeon?, num players
-    EncounterEnd { ts: Duration, name: &'a str, id: u32, kill: bool },
+    EncounterStart { ts: Duration, name: &'a str, id: u32, difficulty: u16, }, // , difficulty/dungeon?, num players
+    EncounterEnd { ts: Duration, name: &'a str, id: u32, difficulty: u16, kill: bool },
     Unknown(Duration, &'a str),
 }
 
@@ -151,14 +151,15 @@ pub fn parse_line<'a>(intern: &'a Interner, line: &str, start_time: NaiveDateTim
         },
         "ENCOUNTER_START" => {
             let OrPanic((id, line)) = line.splitn(2, ',').collect();
-            let (name, _line) = parse_quote(line);
-            Entry::EncounterStart { ts: dur, name: intern.intern(name), id: id.parse().unwrap() }
+            let (name, line) = parse_quote(line);
+            let OrPanic((difficulty, _players)) = line.splitn(2, ',').collect();
+            Entry::EncounterStart { ts: dur, name: intern.intern(name), id: id.parse().unwrap(), difficulty: difficulty.parse().unwrap() }
         },
         "ENCOUNTER_END" => {
             let OrPanic((id, line)) = line.splitn(2, ',').collect();
             let (name, line) = parse_quote(line);
-            let OrPanic((_unknown, _players, kill)) = line.splitn(3, ',').collect();
-            Entry::EncounterEnd { ts: dur, name: intern.intern(name), id: id.parse().unwrap(), kill: kill.trim() == "1" }
+            let OrPanic((difficulty, _players, kill)) = line.splitn(3, ',').collect();
+            Entry::EncounterEnd { ts: dur, name: intern.intern(name), id: id.parse().unwrap(), difficulty: difficulty.parse().unwrap(), kill: kill.trim() == "1" }
         },
         x => Entry::Unknown(dur, intern.intern(x)),
     }
