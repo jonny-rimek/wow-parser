@@ -88,7 +88,7 @@ fn find_init_mastery<'a, R: std::io::BufRead>(iter: wow_combat_log::Iter<'a, R>,
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 struct RestoComputation<'a> {
     map: HashMap<&'a str, (u32, Duration, bool)>,
     total_healing: u64,
@@ -100,44 +100,32 @@ struct RestoComputation<'a> {
     tranq_healing: u64,
     rejuv_healing: u64,
     cult_healing: u64,
+    cult_healing_added: u64,
     healing_2pc: u64,
     healing_2pc_added: u64,
     under_2pc: bool,
     player_id: &'a str,
     cur_mastery: u32,
+    total_healing_per: [u64; 14],
+    total_healing_per_unmast: [u64; 14],
 }
 
 impl<'a> RestoComputation<'a> {
     fn new(player_id: &'a str, starting_mastery: u32) -> Self {
         RestoComputation {
-            map: HashMap::new(),
-            total_healing: 0,
-            total_unmastery_healing: 0,
-            total_uncrit_healing: 0,
-            mastery_healing: 0,
-            living_seed_healing: 0,
-            regrowth_healing: 0,
-            tranq_healing: 0,
-            rejuv_healing: 0,
-            cult_healing: 0,
-            healing_2pc: 0,
-            healing_2pc_added: 0,
-            under_2pc: false,
-            player_id: player_id, cur_mastery: starting_mastery }
+            player_id: player_id, cur_mastery: starting_mastery,
+            ..Default::default()
+        }
     }
 
     fn reset_stats(&mut self) {
-        self.total_healing = 0;
-        self.total_unmastery_healing = 0;
-        self.total_uncrit_healing = 0;
-        self.mastery_healing = 0;
-        self.living_seed_healing = 0;
-        self.regrowth_healing = 0;
-        self.tranq_healing = 0;
-        self.rejuv_healing = 0;
-        self.cult_healing = 0;
-        self.healing_2pc = 0;
-        self.healing_2pc_added = 0;
+        let prev = std::mem::replace(self, Default::default());
+        *self = RestoComputation {
+            player_id: prev.player_id,
+            cur_mastery: prev.cur_mastery,
+            map: prev.map,
+            ..Default::default()
+        }
     }
 
     fn parse_entry(&mut self, log: wow_combat_log::Entry<'a>, filter_start_time: Duration) {
@@ -186,8 +174,9 @@ impl<'a> RestoComputation<'a> {
                 }
 
                 let heal = total_heal - overheal;
-                let mastery = self.cur_mastery + if self.under_2pc { MASTERY_2PC } else { 0 }; 
-                let unmast = ((heal as f64) / (1. + entry.0 as f64 * (mastery as f64 /666.6+4.8)/100.)) as u64;
+                let mastery = self.cur_mastery + if self.under_2pc { MASTERY_2PC } else { 0 };
+                let mastery = (mastery as f64 /666.6+4.8)/100.;
+                let unmast = ((heal as f64) / (1. + entry.0 as f64 * mastery)) as u64;
                 let uncrit_heal = if crit { total_heal / 2 } else { total_heal }; // TODO /2 ignores drape and tauren
                 let uncrit_heal = std::cmp::min(uncrit_heal, heal);
                 self.total_healing += heal;
@@ -195,10 +184,13 @@ impl<'a> RestoComputation<'a> {
                     self.rejuv_healing += heal;
                 }
                 if MASTERY_AURAS.contains(&id) || OTHER_HEALS.contains(&id) {
+                self.total_healing_per[entry.0 as usize] += heal;
+                    self.total_healing_per_unmast[entry.0 as usize] += unmast;
                     self.mastery_healing += (entry.0 as u64) * unmast;
                     self.total_unmastery_healing += unmast;
                     if entry.2 {
                         self.cult_healing += heal;
+                        self.cult_healing_added += (unmast as f64 * mastery) as u64;
                     }
 
                     if self.under_2pc {
@@ -228,7 +220,7 @@ impl<'a> RestoComputation<'a> {
 
 impl<'a> fmt::Display for RestoComputation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "scale_mastery_frac: {:.6}; scale_living_seed: {:.6}; scale_regrowth: {:.6}; scale_tranq: {:.6}; scale_rejuv: {:.6};\n  scale_2pc: {:.6}; scale_2pc_added: {:.6}; scale_cult: {:.6}",
+        write!(f, "scale_mastery_frac: {:.6}; scale_living_seed: {:.6}; scale_regrowth: {:.6}; scale_tranq: {:.6}; scale_rejuv: {:.6};\n  scale_2pc: {:.6}; scale_2pc_added: {:.6}; scale_cult: {:.6}; scale_cult_added: {:.6};\n {:?}",
                self.mastery_healing as f64 / self.total_unmastery_healing as f64,
                self.living_seed_healing as f64 / self.total_uncrit_healing as f64,
                self.regrowth_healing as f64 / self.total_uncrit_healing as f64,
@@ -237,6 +229,8 @@ impl<'a> fmt::Display for RestoComputation<'a> {
                self.healing_2pc as f64/self.total_healing as f64,
                self.healing_2pc_added as f64/self.total_healing as f64,
                self.cult_healing as f64/self.total_healing as f64,
+               self.cult_healing_added as f64 / self.total_healing as f64,
+               self.total_healing_per
                )
     }
 }
@@ -252,8 +246,15 @@ impl<'a, 'b, 'c> std::ops::SubAssign<&'b RestoComputation<'c>> for RestoComputat
         self.tranq_healing -= rhs.tranq_healing;
         self.rejuv_healing -= rhs.rejuv_healing;
         self.cult_healing -= rhs.cult_healing;
+        self.cult_healing_added -= rhs.cult_healing_added;
         self.healing_2pc -= rhs.healing_2pc;
         self.healing_2pc_added -= rhs.healing_2pc_added;
+        for (i, &j) in self.total_healing_per.iter_mut().zip(rhs.total_healing_per.iter()) {
+            *i -= j;
+        }
+        for (i, &j) in self.total_healing_per_unmast.iter_mut().zip(rhs.total_healing_per_unmast.iter()) {
+            *i -= j;
+        }
     }
 }
 

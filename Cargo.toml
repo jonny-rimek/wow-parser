@@ -6,9 +6,6 @@ authors = ["Ben Segall <talchas@talchas.net>"]
 [profile.release]
 debug = true
 
-[profile.dev]
-opt-level = 2
-
 [dependencies]
 chrono = "0.2.25"
 lazy_static = "*"
