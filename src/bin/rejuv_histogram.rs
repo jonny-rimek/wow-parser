@@ -3,7 +3,6 @@ extern crate chrono;
 
 use std::fs::File;
 use std::io::BufReader;
-use std::io::{Seek, SeekFrom};
 use std::collections::HashMap;
 use std::fmt;
 use chrono::Duration;
@@ -47,7 +46,7 @@ impl<'a> RestoComputation<'a> {
                 entry[i] = log.timestamp();
             },
 
-            Heal { id, heal: total_heal, overheal, ty, .. } if REJUV_AURAS.contains(&id) => {
+            Heal { id, heal: total_heal, overheal, .. } if REJUV_AURAS.contains(&id) => {
                 if log.timestamp() < filter_start_time {
                     return;
                 }
@@ -88,7 +87,7 @@ impl<'a, 'b, 'c> std::ops::SubAssign<&'b RestoComputation<'c>> for RestoComputat
 }
 
 fn main() {
-    let mut read = BufReader::new(File::open(std::env::args().nth(1).unwrap()).unwrap());
+    let read = BufReader::new(File::open(std::env::args().nth(1).unwrap()).unwrap());
     let player = std::env::args().nth(2).unwrap();
     let intern = wow_combat_log::Interner::default();
     let start = std::env::args().nth(3).map(|x| Duration::seconds(x.parse().unwrap())).unwrap_or(Duration::zero());
