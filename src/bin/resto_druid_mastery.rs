@@ -149,8 +149,13 @@ impl<'a> RestoComputation<'a> {
         }
         let entry = self.map.entry(log.base().unwrap().dst.id).or_insert((0, log.timestamp(), false));
         let diff = log.timestamp() - entry.1;
-        if diff > Duration::seconds(40) { // buff drops can get lost (if they happen offzone say), no buff lasts 40s (yes, prosperity + bracers + flourish + rejuv probably can...) (we still don't track this _properly_, but good enough)
+
+        // If we haven't seen anything from them for 10 seconds,
+        // assume they left the zone and may have lost all their buffs
+        if diff > Duration::seconds(10) {
             entry.0 = 0;
+        } else {
+            entry.1 = log.timestamp();
         }
         match log {
             Aura { ty, id, .. } if MASTERY_AURAS.contains(&id) => {
