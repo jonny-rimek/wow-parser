@@ -1,4 +1,5 @@
 extern crate chrono;
+extern crate itertools;
 #[macro_use]
 extern crate lazy_static;
 
@@ -20,6 +21,7 @@ use chrono::Datelike;
 pub use intern::Interner;
 use std::io::BufRead;
 use collect_tuple::OrPanic;
+use itertools::Itertools;
 
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -44,14 +46,18 @@ pub enum AuraType { Apply, Refresh, Remove, Stack }
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum HealType { Heal, Periodic }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Entry<'a> {
     Aura { ty: AuraType, base: BaseInfo<'a>, id: u32, aura: &'a str, flags: u8, buff: bool },
     Heal { ty: HealType, base: BaseInfo<'a>, id: u32, spell: &'a str, flags: u8, hp: u64, maxhp: u64, heal: u64, overheal: u64, crit: bool },
 
 
     // followed by: ???, (talents), (pvp talents), [artifact info], [gear], [buffs]
-    Info { ts: Duration, id: &'a str, strength: u32, agi: u32, sta: u32, int: u32, dodge: u32, parry: u32, block: u32, critm: u32, critr: u32, crits: u32, spd: u32, steal: u32, hastem: u32, hastr: u32, hastes: u32, avd: u32, mastery: u32, versm: u32, versr: u32, verss: u32, armor: u32},
+    Info { ts: Duration, id: &'a str, strength: u32, agi: u32, sta: u32, int: u32, dodge: u32, parry: u32, block: u32, critm: u32, critr: u32, crits: u32, spd: u32, steal: u32, hastem: u32, hastr: u32, hastes: u32, avd: u32, mastery: u32, versm: u32, versr: u32, verss: u32, armor: u32,
+
+           // (source id, aura id)
+           auras: Vec<(&'a str, u32)>,
+    },
     ChallengeStart { ts: Duration, id: u32 },
     ChallengeEnd { ts: Duration, id: u32 },
     EncounterStart { ts: Duration, name: &'a str, id: u32, difficulty: u16, }, // , difficulty/dungeon?, num players
@@ -143,12 +149,18 @@ pub fn parse_line<'a>(intern: &'a Interner, line: &str, start_time: NaiveDateTim
             let OrPanic((id, strength, agi, sta, int, dodge, parry, block,
                          critm, critr, crits, spd, steal,
                          hastem, hastr, hastes, avd, mastery,
-                         versm, versr, verss, armor, _rest)) = line.splitn(23, ',').collect();
+                         versm, versr, verss, armor, line)) = line.splitn(23, ',').collect();
+            let OrPanic((_talents, _artifact, _gear, auras)) = line.split('[').collect();
+            let auras = auras.trim().trim_right_matches(']');
+            let auras = auras.split(',').tuples()
+                .map(|(src, aura)| (intern.intern(src), aura.parse().unwrap())).collect();
             Entry::Info { ts: dur, id: intern.intern(id), strength: strength.parse().unwrap(), agi: agi.parse().unwrap(), sta: sta.parse().unwrap(), int: int.parse().unwrap(),
                           dodge: dodge.parse().unwrap(), parry: parry.parse().unwrap(), block: block.parse().unwrap(),
                           critm: critm.parse().unwrap(), critr: critr.parse().unwrap(), crits: crits.parse().unwrap(), spd: spd.parse().unwrap(), steal: steal.parse().unwrap(),
                           hastem: hastem.parse().unwrap(), hastr: hastr.parse().unwrap(), hastes: hastes.parse().unwrap(), avd: avd.parse().unwrap(), mastery: mastery.parse().unwrap(),
-                          versm: versm.parse().unwrap(), versr: versr.parse().unwrap(), verss: verss.parse().unwrap(), armor: armor.parse().unwrap() }
+                          versm: versm.parse().unwrap(), versr: versr.parse().unwrap(), verss: verss.parse().unwrap(), armor: armor.parse().unwrap(),
+                          auras: auras,
+            }
         },
         "CHALLENGE_MODE_START" => {
             let OrPanic((id, _line)) = line.splitn(2, ',').collect();

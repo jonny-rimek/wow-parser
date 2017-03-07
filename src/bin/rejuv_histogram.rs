@@ -28,7 +28,7 @@ impl<'a> RestoComputation<'a> {
         self.histo = Default::default();
     }
 
-    fn parse_entry(&mut self, log: wow_combat_log::Entry<'a>, filter_start_time: Duration) {
+    fn parse_entry(&mut self, log: &wow_combat_log::Entry<'a>, filter_start_time: Duration) {
         use wow_combat_log::Entry::*;
         use wow_combat_log::AuraType::*;
 
@@ -40,7 +40,7 @@ impl<'a> RestoComputation<'a> {
             return;
         }
         let entry = self.map.entry(log.base().unwrap().dst.id).or_insert([log.timestamp(), log.timestamp()]);
-        match log {
+        match *log {
             Aura { ty, id, .. } if REJUV_AURAS.contains(&id) && ty != Remove => {
                 let i = if id == REJUV_AURAS[0] { 0 } else { 1 };
                 entry[i] = log.timestamp();
@@ -124,10 +124,10 @@ fn main() {
             },
             _ => ()
         }
-        encounter.parse_entry(log, start);
-        total.parse_entry(log, start);
-        kills.parse_entry(log, start);
-        bosses.parse_entry(log, start);
+        encounter.parse_entry(&log, start);
+        total.parse_entry(&log, start);
+        kills.parse_entry(&log, start);
+        bosses.parse_entry(&log, start);
     }
     bosses -= &encounter;
     kills -= &encounter;

@@ -130,14 +130,25 @@ impl<'a> RestoComputation<'a> {
         }
     }
 
-    pub fn parse_entry(&mut self, log: wow_combat_log::Entry<'a>, filter_start_time: Duration) {
+    pub fn parse_entry(&mut self, log: &wow_combat_log::Entry<'a>, filter_start_time: Duration) {
         use wow_combat_log::Entry::*;
         use wow_combat_log::AuraType::*;
 
-        if let Info { id, mastery, .. } = log {
-            if self.player_id == id {
+        if let Info { id, mastery, ref auras, .. } = *log {
+            let entry = self.map.entry(id).or_insert((0, log.timestamp(), false));
+            let player_id = self.player_id;
+            if player_id == id {
                 self.cur_mastery = mastery;
+                if auras.contains(&(self.player_id, AURA_2PC)) {
+                    self.cur_mastery -= MASTERY_2PC;
+                    self.under_2pc = true;
+                }
             }
+            entry.0 = auras.iter().filter(|&&(src, aura)|
+                                          src == player_id &&
+                                          MASTERY_AURAS.contains(&aura)).count() as u32;
+            entry.1 = log.timestamp();
+            entry.2 = auras.contains(&(self.player_id, AURA_CULT));
         }
 
         if log.base().is_none() {
@@ -157,7 +168,7 @@ impl<'a> RestoComputation<'a> {
         } else {
             entry.1 = log.timestamp();
         }
-        match log {
+        match *log {
             Aura { ty, id, .. } if MASTERY_AURAS.contains(&id) => {
                 if entry.0 == 0 {
                     entry.1 = log.timestamp();
@@ -299,10 +310,10 @@ fn run<'a, I: Iterator<Item=Entry<'a>>, F: Fn(Option<&str>) -> I>(player: &str, 
             },
             _ => ()
         }
-        encounter.parse_entry(log, start);
-        total.parse_entry(log, start);
-        kills.parse_entry(log, start);
-        bosses.parse_entry(log, start);
+        encounter.parse_entry(&log, start);
+        total.parse_entry(&log, start);
+        kills.parse_entry(&log, start);
+        bosses.parse_entry(&log, start);
     }
     bosses -= &encounter;
     kills -= &encounter;

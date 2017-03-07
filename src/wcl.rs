@@ -122,7 +122,6 @@ impl<'a> Iter<'a> {
         }
     }
     fn parse_entry(&self, json: &JsonValue) -> Entry<'a> {
-        //println!("{}", json);
         let ts = Duration::milliseconds(json["timestamp"].as_i64().unwrap());
         let intern = self.intern;
         let ty = json["type"].as_str().unwrap();
@@ -166,7 +165,10 @@ impl<'a> Iter<'a> {
                     versm: json["versatilityDamageDone"].as_u32().unwrap(),
                     versr: json["versatilityHealingDone"].as_u32().unwrap(),
                     verss: json["versatilityDamageReduction"].as_u32().unwrap(),
-                    armor: json["armor"].as_u32().unwrap(), 
+                    armor: json["armor"].as_u32().unwrap(),
+                    auras: json["auras"].members()
+                        .map(|j| (intern.intern(&j["source"].to_string()),
+                                  j["ability"].as_u32().unwrap())).collect(),
                 },
             "heal" => {
                 let effective = json["amount"].as_u64().unwrap();
