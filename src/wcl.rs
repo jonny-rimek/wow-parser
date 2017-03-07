@@ -77,39 +77,16 @@ pub fn iter<'a>(intern: &'a Interner, log: &str, api_key: &str,
 
 impl<'a> Iter<'a> {
     fn fixup_chunk(&self, json: &mut JsonValue) {
-        if json["events"].len() == 0 {
+        if json["events"].len() == 0 || json["nextPageTimestamp"].as_i64().is_some() {
             return;
         }
 
-        // Work around WCL API bugs:
-        // 1. If the start time is exactly the timestamp of an encounterend, the encounterend is skipped
-        // 2. Sometimes nextPageTimestamp isn't sent
-        //
-        // So decrement the timestamp (or insert one at the last event) and remove any elements at that timestamp
-        let ts = json["nextPageTimestamp"].as_i64().map(|t| t - 1).unwrap_or_else(
-            || json["events"].members().rev().nth(0).unwrap()["timestamp"].as_i64().unwrap());
+        // Work around WCL API bug where sometimes nextPageTimestamp
+        // isn't sent. Also we are set up to only expect an empty
+        // events array as the end
+        let last_ts = json["events"].members().rev().nth(0).unwrap()["timestamp"].as_i64().unwrap();
 
-        // We're probably legitimately at the end
-        if json["events"][0]["timestamp"] == ts {
-            return;
-        }
-
-        if json["nextPageTimestamp"].as_i64().is_none() {
-            println!("missing");
-        }
-
-        if let JsonValue::Array(ref mut array) = json["events"] {
-            let mut i = array.len() - 1;
-
-            while array[i]["timestamp"] == ts {
-                if array[i]["type"] != "encounterend" {
-                    array.remove(i);
-                }
-                i -= 1;
-            }
-            
-        }
-        json["nextPageTimestamp"] = JsonValue::from(ts);
+        json["nextPageTimestamp"] = JsonValue::from(last_ts + 1);
         
     }
     fn load_chunk(&mut self, next_start: u64) {
