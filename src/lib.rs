@@ -1,8 +1,16 @@
 extern crate chrono;
 #[macro_use]
 extern crate lazy_static;
+
+#[cfg(feature = "wcl")]
+extern crate json;
+#[cfg(feature = "wcl")]
+extern crate reqwest;
+
 mod intern;
 mod collect_tuple;
+#[cfg(feature = "wcl")]
+pub mod wcl;
 
 use chrono::Duration;
 use chrono::NaiveDateTime;
@@ -97,7 +105,8 @@ pub fn parse_line<'a>(intern: &'a Interner, line: &str, start_time: NaiveDateTim
     let OrPanic((ty, line)) = line.splitn(2, ",").collect();
     let dur = ts - start_time;
     match ty {
-        "SPELL_AURA_APPLIED" | "SPELL_AURA_REMOVED" | "SPELL_AURA_REFRESH" | "SPELL_AURA_APPLIED_DOSE" => {
+        "SPELL_AURA_APPLIED" | "SPELL_AURA_REMOVED" | "SPELL_AURA_REFRESH" |
+        "SPELL_AURA_APPLIED_DOSE" | "SPELL_AURA_REMOVED_DOSE" => {
             let (base, line) = parse_base(intern, line, dur);
             let OrPanic((id, line)) = line.splitn(2, ',').collect();
             let (name, line) = parse_quote(line);
@@ -105,12 +114,12 @@ pub fn parse_line<'a>(intern: &'a Interner, line: &str, start_time: NaiveDateTim
             let name = intern.intern(name);
             let ty = match ty {
                 "SPELL_AURA_APPLIED" => AuraType::Apply,
-                "SPELL_AURA_APPLIED_DOSE" => AuraType::Stack,
+                "SPELL_AURA_APPLIED_DOSE" | "SPELL_AURA_REMOVED_DOSE" => AuraType::Stack,
                 "SPELL_AURA_REMOVED" => AuraType::Remove,
                 "SPELL_AURA_REFRESH" => AuraType::Refresh,
                 _ => unreachable!(),
             };
-            let buff = buff == "BUFF";
+            let buff = buff.trim() == "BUFF";
             Entry::Aura { ty: ty, base: base, id: id.parse().unwrap(), aura: name, flags: parse_hex(flag) as u8, buff: buff }
         },
         "SPELL_HEAL" | "SPELL_PERIODIC_HEAL" => {

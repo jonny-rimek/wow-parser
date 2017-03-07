@@ -1,12 +1,14 @@
 extern crate wow_combat_log;
 extern crate chrono;
+extern crate clap;
 
 use std::fs::File;
 use std::io::BufReader;
-use std::io::{Seek, SeekFrom};
 use std::collections::HashMap;
 use std::fmt;
 use chrono::Duration;
+use clap::{Arg, App};
+use wow_combat_log::Entry;
 
 static MASTERY_AURAS: &'static [u32] = &[
     33763, // Lifebloom
@@ -49,7 +51,7 @@ const SPELL_REGROWTH: u32 = 8936;
 const SPELL_TRANQ: u32 = 157982;
 const MASTERY_2PC: u32 = 4000;
 
-fn find_init_mastery<'a, R: std::io::BufRead>(iter: wow_combat_log::Iter<'a, R>, player: &str) -> Option<(&'a str, u32)> {
+pub fn find_init_mastery<'a, I: Iterator<Item=Entry<'a>>>(iter: I, player: &str) -> Option<(&'a str, u32)> {
     let mut map = HashMap::new();
     let mut player_id = None;
     for log in iter {
@@ -89,7 +91,7 @@ fn find_init_mastery<'a, R: std::io::BufRead>(iter: wow_combat_log::Iter<'a, R>,
 
 
 #[derive(Default, Debug, Clone)]
-struct RestoComputation<'a> {
+pub struct RestoComputation<'a> {
     map: HashMap<&'a str, (u32, Duration, bool)>,
     total_healing: u64,
     total_unmastery_healing: u64,
@@ -111,14 +113,14 @@ struct RestoComputation<'a> {
 }
 
 impl<'a> RestoComputation<'a> {
-    fn new(player_id: &'a str, starting_mastery: u32) -> Self {
+    pub fn new(player_id: &'a str, starting_mastery: u32) -> Self {
         RestoComputation {
             player_id: player_id, cur_mastery: starting_mastery,
             ..Default::default()
         }
     }
 
-    fn reset_stats(&mut self) {
+    pub fn reset_stats(&mut self) {
         let prev = std::mem::replace(self, Default::default());
         *self = RestoComputation {
             player_id: prev.player_id,
@@ -128,7 +130,7 @@ impl<'a> RestoComputation<'a> {
         }
     }
 
-    fn parse_entry(&mut self, log: wow_combat_log::Entry<'a>, filter_start_time: Duration) {
+    pub fn parse_entry(&mut self, log: wow_combat_log::Entry<'a>, filter_start_time: Duration) {
         use wow_combat_log::Entry::*;
         use wow_combat_log::AuraType::*;
 
@@ -147,7 +149,7 @@ impl<'a> RestoComputation<'a> {
         }
         let entry = self.map.entry(log.base().unwrap().dst.id).or_insert((0, log.timestamp(), false));
         let diff = log.timestamp() - entry.1;
-        if diff > Duration::seconds(10) { // buff drops can get lost (if they happen offzone say), no buff lasts 40s (we still don't track this _properly_, but good enough)
+        if diff > Duration::seconds(40) { // buff drops can get lost (if they happen offzone say), no buff lasts 40s (yes, prosperity + bracers + flourish + rejuv probably can...) (we still don't track this _properly_, but good enough)
             entry.0 = 0;
         }
         match log {
@@ -184,7 +186,7 @@ impl<'a> RestoComputation<'a> {
                     self.rejuv_healing += heal;
                 }
                 if MASTERY_AURAS.contains(&id) || OTHER_HEALS.contains(&id) {
-                self.total_healing_per[entry.0 as usize] += heal;
+                    self.total_healing_per[entry.0 as usize] += heal;
                     self.total_healing_per_unmast[entry.0 as usize] += unmast;
                     self.mastery_healing += (entry.0 as u64) * unmast;
                     self.total_unmastery_healing += unmast;
@@ -258,16 +260,10 @@ impl<'a, 'b, 'c> std::ops::SubAssign<&'b RestoComputation<'c>> for RestoComputat
     }
 }
 
-fn main() {
-    let mut read = BufReader::new(File::open(std::env::args().nth(1).unwrap()).unwrap());
-    let player = std::env::args().nth(2).unwrap();
-    let intern = wow_combat_log::Interner::default();
-    let start = std::env::args().nth(3).map(|x| Duration::seconds(x.parse().unwrap())).unwrap_or(Duration::zero());
-    let end = std::env::args().nth(4).map(|x| Duration::seconds(x.parse().unwrap())).unwrap_or(Duration::max_value());
-    let (pid, cur_mastery) = find_init_mastery(wow_combat_log::iter(&intern, &mut read), &player).unwrap();
-    read.seek(SeekFrom::Start(0)).unwrap();
-
-    let iter = wow_combat_log::iter(&intern, read);
+fn run<'a, I: Iterator<Item=Entry<'a>>, F: Fn(Option<&str>) -> I>(player: &str, start: Duration, end: Duration, get_iter: F) {
+    
+    let (pid, cur_mastery) = find_init_mastery(get_iter(None), player).unwrap();
+    let iter = get_iter(Some(player));
     let iter = iter.take_while(|x| x.timestamp() < end);
     let mut encounter_start = None;
     let mut total = RestoComputation::new(pid, cur_mastery);
@@ -316,4 +312,45 @@ fn main() {
     println!("");
     println!("Kill total:");
     println!("{}", kills);
+}
+
+#[cfg(feature = "wcl")]
+pub fn wcl_iter<'a>(intern: &'a wow_combat_log::Interner, log: &str, api_key: &str,
+                    skip: bool, name: Option<&str>) -> wow_combat_log::wcl::Iter<'a> {
+    wow_combat_log::wcl::iter(intern, log, api_key, skip, name)
+}
+
+#[cfg(not(feature = "wcl"))]
+pub fn wcl_iter<'a>(_: &'a wow_combat_log::Interner, _: &str, _: &str,
+                    _: bool, _: Option<&str>) -> wow_combat_log::Iter<'a, BufReader<File>> {
+    unreachable!()
+}
+
+fn main() {
+    let app = App::new("resto druid mastery");
+    let app = if cfg!(feature = "wcl") {
+        app.arg(Arg::with_name("API key").long("wcl").takes_value(true).help("warcraftlogs API key"))
+    } else {
+        app
+    };
+    let matches = app
+        .arg(Arg::with_name("File/WCL ID").required(true).help("Log file or WCL log ID"))
+        .arg(Arg::with_name("Player").required(true).help("Player name (as reported in log)"))
+        .arg(Arg::with_name("Start").help("Start time in seconds from start of log"))
+        .arg(Arg::with_name("End").help("End time in seconds from start of log"))
+        .get_matches();
+    let player = matches.value_of("Player").unwrap();
+    let intern = wow_combat_log::Interner::default();
+    let start = matches.value_of("Start").map(|x| Duration::seconds(x.parse().unwrap())).unwrap_or(Duration::zero());
+    let end = matches.value_of("End").map(|x| Duration::seconds(x.parse().unwrap())).unwrap_or(Duration::max_value());
+    let input = matches.value_of("File/WCL ID").unwrap();
+    if let Some(api) = matches.value_of("API key") {
+        run(player, start, end, |player|
+            wcl_iter(&intern, input, api, player.is_none(), player)
+        );
+    } else {
+        run(player, start, end, |_|
+            wow_combat_log::iter(&intern, BufReader::new(File::open(input).unwrap()))
+        );
+    }
 }
