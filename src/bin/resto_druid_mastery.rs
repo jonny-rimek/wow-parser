@@ -58,7 +58,6 @@ static REJUV_AURAS: &'static [u32] = &[
 
 static LIVING_SEED_HEALS: &'static [u32] = &[5185, 8936, 18562];
 const AURA_2PC: u32 = 232378;
-const AURA_CULT: u32 = 200389;
 const SPELL_REGROWTH: u32 = 8936;
 const SPELL_TRANQ: u32 = 157982;
 const MASTERY_2PC: u32 = 4000;
@@ -217,8 +216,11 @@ impl<'a> RestoComputation<'a> {
                     self.total_unmastery_healing += unmast;
 
                     for &aura in &entry.0 {
-                        let added = (unmast as f64 * mastery) as u64;
-                        *self.hot_mastery_healing_added.entry(aura).or_insert(0) += added;
+                        // Only measure the contribution to other heals
+                        if aura != id {
+                            let added = (unmast as f64 * mastery) as u64;
+                            *self.hot_mastery_healing_added.entry(aura).or_insert(0) += added;
+                        }
                     }
 
                     if self.under_2pc {
@@ -248,7 +250,7 @@ impl<'a> RestoComputation<'a> {
 
 impl<'a> fmt::Display for RestoComputation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "scale_mastery_frac: {:.6}; scale_living_seed: {:.6}; scale_regrowth: {:.6}; scale_tranq: {:.6}; scale_rejuv: {:.6};\n  scale_2pc: {:.6}; scale_2pc_added: {:.6};\n {:?} \n",
+        write!(f, "scale_mastery_frac: {:.6}; scale_living_seed: {:.6}; scale_regrowth: {:.6}; scale_tranq: {:.6}; scale_rejuv: {:.6};\n  scale_2pc: {:.6}; scale_2pc_added: {:.6};\n",
                     self.mastery_healing as f64 / self.total_unmastery_healing as f64,
                     self.living_seed_healing as f64 / self.total_uncrit_healing as f64,
                     self.regrowth_healing as f64 / self.total_uncrit_healing as f64,
@@ -256,14 +258,13 @@ impl<'a> fmt::Display for RestoComputation<'a> {
                     self.rejuv_healing as f64 / self.total_healing as f64,
                     self.healing_2pc as f64/self.total_healing as f64,
                     self.healing_2pc_added as f64/self.total_healing as f64,
-                    self.total_healing_per
                     )?;
-        write!(f, "{{")?;
+        writeln!(f, "Mastery stack healing on other heals: ")?;
         for &(aura, name) in MASTERY_NAMES {
             let added = self.hot_mastery_healing_added.get(&aura).map(|x| *x).unwrap_or(0);
             write!(f, "{}: {:.6},  ", name, added as f64 / self.total_healing as f64)?;
         }
-        write!(f, "}}")
+        Ok(())
     }
 }
 
