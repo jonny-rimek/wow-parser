@@ -4,7 +4,7 @@ extern crate clap;
 
 use std::fs::File;
 use std::io::BufReader;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use chrono::Duration;
 use clap::{Arg, App};
@@ -20,6 +20,18 @@ static MASTERY_AURAS: &'static [u32] = &[
     200389, // Cultivation
     102352, // Cenarion Ward
     22842, // Frenzied Regen (no really, it counts)
+    ];
+
+static MASTERY_NAMES: &'static [(u32, &'static str)] = &[
+    (33763, "LB"),
+    (774, "Rejuv"),
+    (155777, "Germ"),
+    (8936, "Regrowth"),
+    (48438, "WG"),
+    (207386, "SB"),
+    (200389, "Cult"),
+    (102352, "CW"),
+    (22842, "Frenzied"),
     ];
 
 // not renewal(108238), not ysera's gift(145109/10), not trinkets
@@ -92,7 +104,7 @@ pub fn find_init_mastery<'a, I: Iterator<Item=Entry<'a>>>(iter: I, player: &str)
 
 #[derive(Default, Debug, Clone)]
 pub struct RestoComputation<'a> {
-    map: HashMap<&'a str, (u32, Duration, bool)>,
+    map: HashMap<&'a str, (HashSet<u32>, Duration)>,
     total_healing: u64,
     total_unmastery_healing: u64,
     total_uncrit_healing: u64,
@@ -101,8 +113,6 @@ pub struct RestoComputation<'a> {
     regrowth_healing: u64,
     tranq_healing: u64,
     rejuv_healing: u64,
-    cult_healing: u64,
-    cult_healing_added: u64,
     healing_2pc: u64,
     healing_2pc_added: u64,
     under_2pc: bool,
@@ -110,6 +120,7 @@ pub struct RestoComputation<'a> {
     cur_mastery: u32,
     total_healing_per: [u64; 14],
     total_healing_per_unmast: [u64; 14],
+    hot_mastery_healing_added: HashMap<u32, u64>,
 }
 
 impl<'a> RestoComputation<'a> {
@@ -135,7 +146,7 @@ impl<'a> RestoComputation<'a> {
         use wow_combat_log::AuraType::*;
 
         if let Info { id, mastery, ref auras, .. } = *log {
-            let entry = self.map.entry(id).or_insert((0, log.timestamp(), false));
+            let entry = self.map.entry(id).or_insert((HashSet::new(), log.timestamp()));
             let player_id = self.player_id;
             if player_id == id {
                 self.cur_mastery = mastery;
@@ -144,11 +155,10 @@ impl<'a> RestoComputation<'a> {
                     self.under_2pc = true;
                 }
             }
-            entry.0 = auras.iter().filter(|&&(src, aura)|
-                                          src == player_id &&
-                                          MASTERY_AURAS.contains(&aura)).count() as u32;
+            entry.0 = auras.iter()
+                .filter(|&&(src, aura)| src == player_id && MASTERY_AURAS.contains(&aura))
+                .map(|&(_, aura)| aura).collect();
             entry.1 = log.timestamp();
-            entry.2 = auras.contains(&(self.player_id, AURA_CULT));
         }
 
         if log.base().is_none() {
@@ -158,30 +168,28 @@ impl<'a> RestoComputation<'a> {
         if base.src.id != self.player_id {
             return;
         }
-        let entry = self.map.entry(log.base().unwrap().dst.id).or_insert((0, log.timestamp(), false));
+        let entry = self.map.entry(log.base().unwrap().dst.id).or_insert((HashSet::new(), log.timestamp()));
         let diff = log.timestamp() - entry.1;
 
         // If we haven't seen anything from them for 10 seconds,
         // assume they left the zone and may have lost all their buffs
         if diff > Duration::seconds(10) {
-            entry.0 = 0;
+            entry.0.clear();
         } else {
             entry.1 = log.timestamp();
         }
         match *log {
             Aura { ty, id, .. } if MASTERY_AURAS.contains(&id) => {
-                if entry.0 == 0 {
-                    entry.1 = log.timestamp();
-                }
                 match ty {
-                    Apply => entry.0 += 1,
-                    Remove => entry.0 = entry.0.saturating_sub(1), 
+                    Apply | Refresh => {
+                        entry.0.insert(id);
+                    },
+                    Remove => {
+                        entry.0.remove(&id);
+                    },
                     _ => (),
                 }
                 entry.1 = log.timestamp();
-                if id == AURA_CULT {
-                    entry.2 = ty != Remove;
-                }
             },
             Aura { ty, id: AURA_2PC, .. } => {
                 self.under_2pc = ty != Remove;
@@ -192,9 +200,10 @@ impl<'a> RestoComputation<'a> {
                 }
 
                 let heal = total_heal - overheal;
+                let stacks = entry.0.len();
                 let mastery = self.cur_mastery + if self.under_2pc { MASTERY_2PC } else { 0 };
                 let mastery = (mastery as f64 /666.6+4.8)/100.;
-                let unmast = ((heal as f64) / (1. + entry.0 as f64 * mastery)) as u64;
+                let unmast = ((heal as f64) / (1. + stacks as f64 * mastery)) as u64;
                 let uncrit_heal = if crit { total_heal / 2 } else { total_heal }; // TODO /2 ignores drape and tauren
                 let uncrit_heal = std::cmp::min(uncrit_heal, heal);
                 self.total_healing += heal;
@@ -202,17 +211,18 @@ impl<'a> RestoComputation<'a> {
                     self.rejuv_healing += heal;
                 }
                 if MASTERY_AURAS.contains(&id) || OTHER_HEALS.contains(&id) {
-                    self.total_healing_per[entry.0 as usize] += heal;
-                    self.total_healing_per_unmast[entry.0 as usize] += unmast;
-                    self.mastery_healing += (entry.0 as u64) * unmast;
+                    self.total_healing_per[stacks] += heal;
+                    self.total_healing_per_unmast[stacks] += unmast;
+                    self.mastery_healing += (stacks as u64) * unmast;
                     self.total_unmastery_healing += unmast;
-                    if entry.2 {
-                        self.cult_healing += heal;
-                        self.cult_healing_added += (unmast as f64 * mastery) as u64;
+
+                    for &aura in &entry.0 {
+                        let added = (unmast as f64 * mastery) as u64;
+                        *self.hot_mastery_healing_added.entry(aura).or_insert(0) += added;
                     }
 
                     if self.under_2pc {
-                        let added = (entry.0 as f64 * unmast as f64 * MASTERY_2PC as f64 /666.6 / 100.) as u64;
+                        let added = (stacks as f64 * unmast as f64 * MASTERY_2PC as f64 /666.6 / 100.) as u64;
                         self.healing_2pc += heal;
                         self.healing_2pc_added += added;
                     }
@@ -238,18 +248,22 @@ impl<'a> RestoComputation<'a> {
 
 impl<'a> fmt::Display for RestoComputation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "scale_mastery_frac: {:.6}; scale_living_seed: {:.6}; scale_regrowth: {:.6}; scale_tranq: {:.6}; scale_rejuv: {:.6};\n  scale_2pc: {:.6}; scale_2pc_added: {:.6}; scale_cult: {:.6}; scale_cult_added: {:.6};\n {:?}",
-               self.mastery_healing as f64 / self.total_unmastery_healing as f64,
-               self.living_seed_healing as f64 / self.total_uncrit_healing as f64,
-               self.regrowth_healing as f64 / self.total_uncrit_healing as f64,
-               self.tranq_healing as f64 / self.total_healing as f64,
-               self.rejuv_healing as f64 / self.total_healing as f64,
-               self.healing_2pc as f64/self.total_healing as f64,
-               self.healing_2pc_added as f64/self.total_healing as f64,
-               self.cult_healing as f64/self.total_healing as f64,
-               self.cult_healing_added as f64 / self.total_healing as f64,
-               self.total_healing_per
-               )
+        write!(f, "scale_mastery_frac: {:.6}; scale_living_seed: {:.6}; scale_regrowth: {:.6}; scale_tranq: {:.6}; scale_rejuv: {:.6};\n  scale_2pc: {:.6}; scale_2pc_added: {:.6};\n {:?} \n",
+                    self.mastery_healing as f64 / self.total_unmastery_healing as f64,
+                    self.living_seed_healing as f64 / self.total_uncrit_healing as f64,
+                    self.regrowth_healing as f64 / self.total_uncrit_healing as f64,
+                    self.tranq_healing as f64 / self.total_healing as f64,
+                    self.rejuv_healing as f64 / self.total_healing as f64,
+                    self.healing_2pc as f64/self.total_healing as f64,
+                    self.healing_2pc_added as f64/self.total_healing as f64,
+                    self.total_healing_per
+                    )?;
+        write!(f, "{{")?;
+        for &(aura, name) in MASTERY_NAMES {
+            let added = self.hot_mastery_healing_added.get(&aura).map(|x| *x).unwrap_or(0);
+            write!(f, "{}: {:.6},  ", name, added as f64 / self.total_healing as f64)?;
+        }
+        write!(f, "}}")
     }
 }
 
@@ -263,8 +277,6 @@ impl<'a, 'b, 'c> std::ops::SubAssign<&'b RestoComputation<'c>> for RestoComputat
         self.regrowth_healing -= rhs.regrowth_healing;
         self.tranq_healing -= rhs.tranq_healing;
         self.rejuv_healing -= rhs.rejuv_healing;
-        self.cult_healing -= rhs.cult_healing;
-        self.cult_healing_added -= rhs.cult_healing_added;
         self.healing_2pc -= rhs.healing_2pc;
         self.healing_2pc_added -= rhs.healing_2pc_added;
         for (i, &j) in self.total_healing_per.iter_mut().zip(rhs.total_healing_per.iter()) {
@@ -272,6 +284,9 @@ impl<'a, 'b, 'c> std::ops::SubAssign<&'b RestoComputation<'c>> for RestoComputat
         }
         for (i, &j) in self.total_healing_per_unmast.iter_mut().zip(rhs.total_healing_per_unmast.iter()) {
             *i -= j;
+        }
+        for (aura, &heal) in rhs.hot_mastery_healing_added.iter() {
+            *self.hot_mastery_healing_added.get_mut(aura).unwrap() -= heal;
         }
     }
 }
