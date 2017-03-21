@@ -263,7 +263,9 @@ impl<'a> fmt::Display for RestoComputation<'a> {
         writeln!(f, "Mastery stack healing on other heals: ")?;
         for &(aura, name) in MASTERY_NAMES {
             let added = self.hot_mastery_healing_added.get(&aura).map(|x| *x).unwrap_or(0);
-            write!(f, "{}: {:.6},  ", name, added as f64 / self.total_healing as f64)?;
+            if added != 0 {
+                write!(f, "{}: {:.6},  ", name, added as f64 / self.total_healing as f64)?;
+            }
         }
         Ok(())
     }
