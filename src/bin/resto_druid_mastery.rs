@@ -136,6 +136,7 @@ impl<'a> RestoComputation<'a> {
             player_id: prev.player_id,
             cur_mastery: prev.cur_mastery,
             map: prev.map,
+            under_2pc: prev.under_2pc,
             ..Default::default()
         }
     }
