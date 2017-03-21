@@ -6,6 +6,7 @@ use std::io::{BufReader, Read};
 use chrono::Duration;
 use std::collections::HashMap;
 use std::str;
+use collect_tuple::OrPanic;
 
 use {Entry, Object, BaseInfo, AuraType, HealType};
 
@@ -28,7 +29,7 @@ fn get_json(client: &Client, url: Url) -> JsonValue {
     json::parse(str::from_utf8(&buf).unwrap()).unwrap()
 }
 
-fn parse_fights<'a>(intern: &'a Interner, log: &str, api_key: &str) -> (Client, HashMap<isize, &'a str>, u64, u64) {
+fn parse_fights<'a>(intern: &'a Interner, log: &str, fight: usize, api_key: &str) -> (Client, HashMap<isize, &'a str>, u64, u64) {
     let client = Client::new().unwrap();
     let mut base_url = "https://www.warcraftlogs.com:443/v1/report/fights/".to_owned();
     base_url.push_str(log);
@@ -40,17 +41,25 @@ fn parse_fights<'a>(intern: &'a Interner, log: &str, api_key: &str) -> (Client, 
         map.insert(f["id"].as_isize().unwrap(),
                    intern.intern(f["name"].as_str().unwrap()));
     }
-    let start = json["fights"].members().filter(|x| x["boss"] != 0).map(|x| x["start_time"].as_u64()).nth(0);
+
+    let start = json["fights"].members().filter(|x| x["boss"] != 0).map(|x| x["start_time"].as_u64()).nth(fight);
     let start = start.unwrap().unwrap();
     (client, map, end, start)
 }
 
 pub fn iter<'a>(intern: &'a Interner, log: &str, api_key: &str,
                 skip_to_first_boss: bool, actorname: Option<&str>) -> Iter<'a> {
-    let (client, names, end, first_boss) = parse_fights(intern, log, api_key);
+    let (log, fight) = if log.contains(':') {
+        let log = {log};
+        let OrPanic((l, id)) = log.split(':').collect();
+        (l, id.parse().unwrap())
+    } else {
+        (log, 0)
+    };
+    let (client, names, end, first_boss) = parse_fights(intern, log, fight, api_key);
     let mut base_url = "https://www.warcraftlogs.com:443/v1/report/events/".to_owned();
     base_url.push_str(log);
-    let start = if skip_to_first_boss { first_boss } else { 0 };
+    let start = if skip_to_first_boss || fight != 0 { first_boss } else { 0 };
     let mut args = vec![("api_key", api_key.to_string()), ("end", end.to_string())];
     if let Some(name) = actorname {
         // No, despite the sourceID field in the output you can't
